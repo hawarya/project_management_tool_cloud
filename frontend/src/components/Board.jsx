@@ -1,18 +1,23 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import api from '../services/api';
-import { Plus, MoreHorizontal, Clock, AlertCircle } from 'lucide-react';
+import { Plus, MoreHorizontal, Clock, X, Edit2, Trash2, MoreVertical } from 'lucide-react';
 import { format } from 'date-fns';
 
-const Board = ({ projectId }) => {
+const Board = ({ projectId, members = [] }) => {
   const [tasks, setTasks] = useState({
     'Pending': [],
     'In Progress': [],
     'Completed': []
   });
   const [loading, setLoading] = useState(true);
+  
   const [showTaskModal, setShowTaskModal] = useState(false);
-  const [newTask, setNewTask] = useState({ title: '', priority: 'Medium', deadline: '' });
+  const [isEditingTask, setIsEditingTask] = useState(false);
+  const [newTask, setNewTask] = useState({ _id: '', title: '', priority: 'Medium', deadline: '', assignees: [], status: 'Pending' });
+
+  const [openMenuId, setOpenMenuId] = useState(null);
+  const menuRef = useRef(null);
 
   const fetchTasks = async () => {
     try {
@@ -32,6 +37,14 @@ const Board = ({ projectId }) => {
 
   useEffect(() => {
     fetchTasks();
+    
+    const handleClickOutside = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) {
+        setOpenMenuId(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [projectId]);
 
   const onDragEnd = async (result) => {
@@ -57,20 +70,73 @@ const Board = ({ projectId }) => {
       await api.put(`/tasks/${draggableId}`, { status: destination.droppableId });
     } catch (err) {
       console.error(err);
-      fetchTasks(); // Revert on failure
+      fetchTasks();
     }
   };
 
-  const handleCreateTask = async (e) => {
+  const handleSaveTask = async (e) => {
     e.preventDefault();
     try {
-      await api.post('/tasks', { ...newTask, projectId });
+      if (isEditingTask) {
+        await api.put(`/tasks/${newTask._id}`, newTask);
+      } else {
+        await api.post('/tasks', { ...newTask, projectId });
+      }
       setShowTaskModal(false);
-      setNewTask({ title: '', priority: 'Medium', deadline: '' });
+      setNewTask({ _id: '', title: '', priority: 'Medium', deadline: '', assignees: [], status: 'Pending' });
+      setIsEditingTask(false);
       fetchTasks();
     } catch (err) {
       console.error(err);
     }
+  };
+
+  const handleDeleteTask = async (e, id) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (window.confirm('Are you sure you want to delete this task?')) {
+      try {
+        await api.delete(`/tasks/${id}`);
+        fetchTasks();
+      } catch (err) {
+        console.error(err);
+        alert('Error deleting task');
+      }
+    }
+    setOpenMenuId(null);
+  };
+
+  const openEditModal = (e, task) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsEditingTask(true);
+    setNewTask({
+      _id: task._id,
+      title: task.title,
+      priority: task.priority,
+      status: task.status,
+      deadline: task.deadline ? task.deadline.split('T')[0] : '',
+      assignees: task.assignees ? task.assignees.map(a => a._id || a) : []
+    });
+    setOpenMenuId(null);
+    setShowTaskModal(true);
+  };
+
+  const openCreateModal = () => {
+    setIsEditingTask(false);
+    setNewTask({ _id: '', title: '', priority: 'Medium', deadline: '', assignees: [], status: 'Pending' });
+    setShowTaskModal(true);
+  };
+
+  const handleAssigneeChange = (e) => {
+    const value = Array.from(e.target.selectedOptions, option => option.value);
+    setNewTask({ ...newTask, assignees: value });
+  };
+
+  const handleMenuClick = (e, id) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setOpenMenuId(openMenuId === id ? null : id);
   };
 
   const getPriorityColor = (priority) => {
@@ -89,7 +155,7 @@ const Board = ({ projectId }) => {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
         <h2 className="text-xl font-bold text-gray-900 dark:text-white">Task Board</h2>
         <button 
-          onClick={() => setShowTaskModal(true)}
+          onClick={openCreateModal}
           className="flex items-center px-3 py-1.5 bg-blue-100 hover:bg-blue-200 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 dark:hover:bg-blue-900/60 font-medium rounded-lg transition-colors text-sm"
         >
           <Plus size={16} className="mr-1" />
@@ -133,24 +199,50 @@ const Board = ({ projectId }) => {
                             {...provided.dragHandleProps}
                             className={`bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border ${
                               snapshot.isDragging 
-                                ? 'border-blue-400 dark:border-blue-500 shadow-md rotate-2 scale-105 ring-2 ring-blue-400/20' 
+                                ? 'border-blue-400 dark:border-blue-500 shadow-md rotate-2 scale-105 ring-2 ring-blue-400/20 z-50' 
                                 : 'border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-600'
-                            } mb-3 group transition-all`}
+                            } mb-3 group transition-all relative`}
                           >
                             <div className="flex justify-between items-start mb-2">
                               <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full ${getPriorityColor(task.priority)}`}>
                                 {task.priority}
                               </span>
+                              
+                              <div className="relative" ref={openMenuId === task._id ? menuRef : null}>
+                                <button 
+                                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors p-1"
+                                  onClick={(e) => handleMenuClick(e, task._id)}
+                                >
+                                  <MoreVertical size={14} />
+                                </button>
+                                
+                                {openMenuId === task._id && (
+                                  <div className="absolute right-0 mt-1 w-28 bg-white dark:bg-gray-800 rounded-md shadow-lg border border-gray-200 dark:border-gray-700 z-50 py-1" onClick={e => e.preventDefault()}>
+                                    <button
+                                      onClick={(e) => openEditModal(e, task)}
+                                      className="w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center"
+                                    >
+                                      <Edit2 size={12} className="mr-2" /> Edit
+                                    </button>
+                                    <button
+                                      onClick={(e) => handleDeleteTask(e, task._id)}
+                                      className="w-full text-left px-3 py-1.5 text-xs text-red-600 dark:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center"
+                                    >
+                                      <Trash2 size={12} className="mr-2" /> Delete
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                             </div>
-                            <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-3">
+                            <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-3 break-words relative z-0">
                               {task.title}
                             </h4>
                             
                             <div className="flex justify-between items-end mt-4">
                               <div className="flex -space-x-1.5">
                                 {task.assignees?.map((a, i) => (
-                                  <div key={a._id} className="w-6 h-6 rounded-full bg-indigo-100 dark:bg-indigo-900 border border-white dark:border-gray-800 flex items-center justify-center text-[10px] text-indigo-700 dark:text-indigo-300 z-10" style={{ zIndex: 10 - i }} title={a.name}>
-                                    {a.name.charAt(0)}
+                                  <div key={a._id || i} className="w-6 h-6 rounded-full bg-indigo-100 dark:bg-indigo-900 border border-white dark:border-gray-800 flex items-center justify-center text-[10px] text-indigo-700 dark:text-indigo-300 z-10" style={{ zIndex: 10 - i }} title={a?.name}>
+                                    {a?.name ? a.name.charAt(0).toUpperCase() : '?'}
                                   </div>
                                 ))}
                                 {(!task.assignees || task.assignees.length === 0) && (
@@ -185,13 +277,14 @@ const Board = ({ projectId }) => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
             <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-800/50">
-              <h3 className="text-lg font-medium text-gray-900 dark:text-white">Add Task</h3>
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white">
+                {isEditingTask ? 'Edit Task' : 'Add Task'}
+              </h3>
               <button onClick={() => setShowTaskModal(false)} className="text-gray-400 hover:text-gray-500 dark:hover:text-gray-300">
-                <span className="sr-only">Close</span>
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                <X size={20} />
               </button>
             </div>
-            <form onSubmit={handleCreateTask} className="p-6 space-y-4">
+            <form onSubmit={handleSaveTask} className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Task Title</label>
                 <input
@@ -202,6 +295,22 @@ const Board = ({ projectId }) => {
                   onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
                 />
               </div>
+              
+              {isEditingTask && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Status</label>
+                  <select
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm transition-colors"
+                    value={newTask.status}
+                    onChange={(e) => setNewTask({ ...newTask, status: e.target.value })}
+                  >
+                    <option value="Pending">Pending</option>
+                    <option value="In Progress">In Progress</option>
+                    <option value="Completed">Completed</option>
+                  </select>
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Priority</label>
                 <select
@@ -214,6 +323,22 @@ const Board = ({ projectId }) => {
                   <option value="High">High</option>
                 </select>
               </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Assign To (Multiple allowed)</label>
+                <select
+                  multiple
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm transition-colors h-24"
+                  value={newTask.assignees}
+                  onChange={handleAssigneeChange}
+                >
+                  {members.map(member => (
+                    <option key={member._id} value={member._id}>{member.name}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Hold Ctrl/Cmd to select multiple assignees</p>
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Deadline</label>
                 <input
@@ -235,7 +360,7 @@ const Board = ({ projectId }) => {
                   type="submit"
                   className="px-4 py-2 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 transition-colors"
                 >
-                  Create
+                  {isEditingTask ? 'Save Changes' : 'Create'}
                 </button>
               </div>
             </form>
